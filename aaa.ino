@@ -13,13 +13,13 @@
 
 // —— SPI & CSN 引脚 ——  
 #define PIN_MISO      16   // DDC112 DOUT → RP2040 MISO
-#define PIN_MOSI      19   // DDC112 DIN  ← RP2040 (will be held low)
+#define PIN_MOSI      19   // DDC112 DIN  ← RP2040 
 #define PIN_SCK       18   // RP2040 SCLK → DDC112 DCLK
 #define PIN_CSN       17   // RP2040 → DDC112 nDXMIT (CS)，低选中
 
 // —— 控制引脚 ——  
 #define PIN_nDVALID   12   // DDC112 nDVALID → RP2040 IRQ
-#define PIN_TEST      8    // RP2040 → DDC112 TEST 控制引脚
+#define PIN_TEST      8    // RP2040 → DDC112 TEST 
 
 // —— ADC／积分参数 ——  
 #define ADC_BITS   20      // 20位（每通道）
@@ -32,28 +32,28 @@ static const float QFS_pC[8] = {
 };
 uint8_t current_range = 0;
 
-// 数据就绪标志 & 数据缓冲
+// 数据就绪
 volatile bool data_ready = false;
 volatile uint8_t spi_buf[5];  // 5字节数据，使用volatile确保中断安全
-volatile int32_t raw_data = 0;  // 改为int32_t，更准确的数据类型
+volatile int32_t raw_data = 0; 
 volatile bool data_processing = false;  // 防止中断重入
 
 // 添加SPI时序控制函数
 void spi_read_with_clock(uint8_t* buffer, size_t len) {
-    // 手动控制SPI时序，确保与DDC112配合
+    // 手动控制SPI时序，模式3：CPOL=1, CPHA=1
     for (size_t i = 0; i < len; i++) {
         buffer[i] = 0;
         for (int bit = 7; bit >= 0; bit--) {
-            // 上升沿读取数据
-            gpio_put(PIN_SCK, 1);
+            // 下降沿读取数据 (CPHA=1)
+            gpio_put(PIN_SCK, 0);
             busy_wait_us(1);  // 确保建立时间
             
             if (gpio_get(PIN_MISO)) {
                 buffer[i] |= (1 << bit);
             }
             
-            // 下降沿
-            gpio_put(PIN_SCK, 0);
+            // 上升沿
+            gpio_put(PIN_SCK, 1);
             busy_wait_us(1);  // 确保保持时间
         }
     }
@@ -64,10 +64,9 @@ void irq_handler(uint gpio, uint32_t events) {
     if (events & GPIO_IRQ_EDGE_FALL && !data_processing) {
         data_processing = true;  // 设置处理标志，防止重入
         
-        // 等待一小段时间确保数据稳定
         busy_wait_us(10);
         
-        // SPI 事务：拉低 CSN → 读 5 字节 → 拉高 CSN
+        // SPI ：拉低 CSN → 读 5 字节 → 拉高 CSN
         gpio_put(PIN_CSN, 0);  // DXMIT LOW
         busy_wait_us(2);       // 确保CS建立时间
         
@@ -77,12 +76,11 @@ void irq_handler(uint gpio, uint32_t events) {
         busy_wait_us(2);       // 确保CS保持时间
         gpio_put(PIN_CSN, 1);  // DXMIT HIGH
         
-        // 修正数据解析：DDC112通道1数据在字节2-4 (20位)
+        // 数据解析：DDC112通道1数据在字节2-4 (20位)
         uint32_t temp = ((uint32_t)(spi_buf[2] & 0x0F) << 16) | 
                        ((uint32_t)spi_buf[3] << 8) | 
                        (uint32_t)spi_buf[4];
         
-        // 正确的20位有符号数处理
         if (temp & 0x80000) {  // 检查第20位（符号位）
             raw_data = (int32_t)(temp | 0xFFF00000);  // 符号扩展到32位
         } else {
@@ -100,15 +98,14 @@ void setup_test_pin() {
     gpio_set_dir(PIN_TEST, GPIO_OUT);
     gpio_set_drive_strength(PIN_TEST, GPIO_DRIVE_STRENGTH_8MA);
     
-    // 根据DDC112数据手册：
-    // TEST = LOW (0V): 正常工作模式
-    // TEST = HIGH (VDD): 测试模式，内部产生已知信号用于测试
-    gpio_put(PIN_TEST, 0);  // 设置为正常工作模式
+
+    // TEST = LOW (0V): 正常工作
+    gpio_put(PIN_TEST, 0);  
     
     Serial.println(F("TEST pin configured: Normal operation mode (LOW)"));
 }
 
-// 设置TEST引脚状态的函数
+// 设置TEST引脚状态
 void set_test_mode(bool test_mode) {
     gpio_put(PIN_TEST, test_mode ? 1 : 0);
     if (test_mode) {
@@ -162,7 +159,7 @@ void setup_spi_and_din() {
     gpio_init(PIN_SCK);
     gpio_set_dir(PIN_SCK, GPIO_OUT);
     gpio_set_drive_strength(PIN_SCK, GPIO_DRIVE_STRENGTH_8MA);
-    gpio_put(PIN_SCK, 0);  // 时钟空闲为低 (CPOL=0)
+    gpio_put(PIN_SCK, 1);  // 时钟空闲为高 (CPOL=1)
 
     // CSN 引脚初始化
     gpio_init(PIN_CSN);
@@ -196,7 +193,7 @@ void setup_ndvalid_irq() {
     );
 }
 
-// 切换量程（可在运行时调用）
+// 切换量程
 void set_range(uint8_t r) {
     if (r > 7) return;
     current_range = r;
@@ -205,19 +202,19 @@ void set_range(uint8_t r) {
 
 void setup() {
     Serial.begin(115200);
-    delay(500);  // 增加延时确保串口稳定
+    delay(500);  // 增加延时
     Serial.println(F(">> DDC112 Single Channel Current Meter Starting >>"));
 
     setup_pio_clocks();
     setup_spi_and_din();
-    setup_test_pin();      // 添加TEST引脚初始化
+    setup_test_pin();      // TEST引脚初始化
     setup_ndvalid_irq();
 
     Serial.println(F("Setup complete. Awaiting nDVALID IRQ..."));
     Serial.printf("System clock: %u Hz\n", clock_get_hz(clk_sys));
     Serial.printf("Current range: %u (QFS=%.4f pC)\n", current_range, QFS_pC[current_range]);
     
-    // 可选：启动时进行自检
+  
     Serial.println(F("Performing self-test..."));
     set_test_mode(true);   // 启用测试模式
     delay(100);            // 等待几个积分周期
@@ -227,7 +224,7 @@ void setup() {
 void loop() {
     static uint32_t last_print = 0;
     static uint32_t sample_count = 0;
-    static int32_t last_valid_data = 0;  // 用于检测数据变化
+    static int32_t last_valid_data = 0;  // 检测数据变化
     
     // 每500ms打印一次状态（如果没有数据）
     if (!data_ready && (millis() - last_print > 500)) {
